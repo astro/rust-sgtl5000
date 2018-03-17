@@ -1,0 +1,20 @@
+[package]
+categories = ["embedded", "no-std"]
+name = "sgtl5000"
+version = "0.0.0"
+keywords = ["embedded-hal", "temperature", "humidity", "sensor"]
+
+[dependencies]
+cortex-m = "0.4.3"
+cortex-m-rt = { version = "0.3.12", features = ["abort-on-panic"] }
+cortex-m-semihosting = "0.2.0"
+#embedded-hal = { path = "../embedded-hal" }
+embedded-hal = "0.1.2"
+stm32f429 = { version = "0.3.0", features = ["rt"] }
+stm32f429-hal = { path = "../stm32f429-hal" }
+bitfield = "0.12.1"
+# byteorder = { version = "1.2.1", default-features = false }
+
+[profile.release]
+debug = 2
+lto = true
