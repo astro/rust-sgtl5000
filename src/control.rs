@@ -76,15 +76,15 @@ impl<I2C: i2c::Read<Error=I2CE> + i2c::Write<Error=I2CE>, I2CE> SGTL5000Control<
             ana_power.set_reftop_powerup(true);
             // Enable stereo
             ana_power.set_dac_mono(true);
-            ana_power.set_adc_mono(true);
+            // ana_power.set_adc_mono(true);
 
             ana_power
         })?;
         self.modify_register(|mut linreg: ChipLinregCtrl| {
             // VDDA & VDDIO both over 3.1V
-            linreg.set_vdcc_man_assn(true);
-            linreg.set_vdcc_assn_ovrd(true);
-            linreg.set_d_programming(0xC);
+            linreg.set_vdcc_assn_ovrd(false);
+            linreg.set_vdcc_man_assn(false);
+            linreg.set_d_programming(0);
             linreg
         })?;
         // // Setup PL for 12 MHz clock
@@ -104,15 +104,13 @@ impl<I2C: i2c::Read<Error=I2CE> + i2c::Write<Error=I2CE>, I2CE> SGTL5000Control<
         let vag: u16 = vdda / 2;
         let vag_val = vag.saturating_sub(Self::ANA_GND_BASE) / Self::ANA_GND_STEP;
         self.modify_register(|mut ref_ctrl: ChipRefCtrl| {
-            // TODO
-            // ref_ctrl.set_vag_val(vag_val.min(0x1F) as u8);
-            ref_ctrl.set_vag_val(0x1F);
+            ref_ctrl.set_vag_val(vag_val.min(0x1F) as u8);
             ref_ctrl.set_bias_ctrl(1);
             ref_ctrl
         })?;
         self.modify_register(|mut line_out_ctrl: ChipLineOutCtrl| {
             // LO_VAGCNTRL=1.65V
-            line_out_ctrl.set_lo_vagcntrl(0x22);
+            line_out_ctrl.set_lo_vagcntrl(vag_val.min(0x23) as u8);
             // OUT_CURRENT=0.54mA
             line_out_ctrl.set_out_current(0xF);
             line_out_ctrl
@@ -139,7 +137,7 @@ impl<I2C: i2c::Read<Error=I2CE> + i2c::Write<Error=I2CE>, I2CE> SGTL5000Control<
         self.modify_register(|mut ana_power: ChipAnaPower| {
             // Power up internal linear regulator (Set bit 9)
             ana_power.set_linreg_d_powerup(false);
-            ana_power.set_vddc_chrgpmp_powerup(false);
+            ana_power.set_vddc_chrgpmp_powerup(true);
 
             ana_power.set_pll_powerup(false);
             ana_power.set_vcoamp_powerup(true);
@@ -164,20 +162,20 @@ impl<I2C: i2c::Read<Error=I2CE> + i2c::Write<Error=I2CE>, I2CE> SGTL5000Control<
             i2s_ctrl.set_ms(true);
             // 32Fs
             i2s_ctrl.set_sclkfreq(true);
-            i2s_ctrl.set_sclk_inv(true);
+            i2s_ctrl.set_sclk_inv(false);
             i2s_ctrl.set_lralign(false);
             i2s_ctrl.set_lrpol(false);
             // i2s_ctrl.set_pcmsync(false);
             // I2S data length: 0: 32 bits, 3: 16 bits
             // TODO: let depend on types
             i2s_ctrl.set_dlen(3);
-            // PCM format
+            // PCM standard
             i2s_ctrl.set_i2s_mode(2);
             i2s_ctrl
         })?;
         self.modify_register(|mut ana_power: ChipAnaPower| {
-            // ana_power.set_startup_powerup(false);
-            // ana_power.set_linreg_simple_powerup(false);
+            ana_power.set_startup_powerup(false);
+            ana_power.set_linreg_simple_powerup(true);
 
             // Power up desired digital blocks
             ana_power.set_lineout_powerup(true);
@@ -190,61 +188,63 @@ impl<I2C: i2c::Read<Error=I2CE> + i2c::Write<Error=I2CE>, I2CE> SGTL5000Control<
             ana_power.set_vag_powerup(true);
             ana_power
         })?;
-        // self.modify_register(|mut dap_control: DapControl| {
-        //     dap_control.set_dap_en(true);
-        //     dap_control
-        // })?;
+        self.modify_register(|mut dap_control: DapControl| {
+            dap_control.set_dap_en(true);
+            dap_control
+        })?;
 
         // Power up desired digital blocks
         self.modify_register(|mut dig_power: ChipDigPower| {
             // dig_power.set_adc_powerup(true);
             dig_power.set_dac_powerup(true);
-            // dig_power.set_dap_powerup(true);
+            dig_power.set_dap_powerup(true);
             // dig_power.set_i2s_out_powerup(true);
             dig_power.set_i2s_in_powerup(true);
             dig_power
         })?;
 
         // Setup routing
-        // Example 1: I2S_IN /*-> DAP*/ -> DAC -> LINEOUT, HP_OUT
+        // Example 1: I2S_IN -> DAP -> DAC -> LINEOUT, HP_OUT
         self.modify_register(|mut sss_ctrl: ChipSssCtrl| {
-            // // Route I2S_IN to DAP
-            // sss_ctrl.set_dap_select(1);
-            // Route I2S_IN to DAC
-            sss_ctrl.set_dac_select(1);
+            // Route I2S_IN to DAP
+            sss_ctrl.set_dap_select(1);
+            // Route DAP to DAC
+            sss_ctrl.set_dac_select(3);
             sss_ctrl
         })?;
         self.modify_register(|mut adcdac_ctrl: ChipAdcdacCtrl| {
+            adcdac_ctrl.set_vol_ramp_en(true);
+            adcdac_ctrl.set_vol_expo_ramp(false);
             adcdac_ctrl.set_dac_mute_right(false);
             adcdac_ctrl.set_dac_mute_left(false);
             adcdac_ctrl
         })?;
 
         // Volume
-        // let mut ana_hp_ctrl = ChipAnaHpCtrl::new(0);
-        // ana_hp_ctrl.set_hp_vol_right(0x18);
-        // ana_hp_ctrl.set_hp_vol_left(0x18);
-        // self.write_register(ana_hp_ctrl)?;
+        let mut ana_hp_ctrl = ChipAnaHpCtrl::new(0);
+        ana_hp_ctrl.set_hp_vol_right(0x18);
+        ana_hp_ctrl.set_hp_vol_left(0x18);
+        self.write_register(ana_hp_ctrl)?;
 
-        // let mut line_out_vol = ChipLineOutVol::new(0);
-        // line_out_vol.set_lo_vol_right(0x19);
-        // line_out_vol.set_lo_vol_left(0x19);
-        // self.write_register(line_out_vol)?;
+        let mut line_out_vol = ChipLineOutVol::new(0);
+        line_out_vol.set_lo_vol_right(0x19);
+        line_out_vol.set_lo_vol_left(0x19);
+        self.write_register(line_out_vol)?;
 
-        // let mut dac_vol = ChipDacVol::new(0);
-        // // Min: 0xFC, Max: 0x3c
-        // dac_vol.set_dac_vol_right(0x3c);
-        // dac_vol.set_dac_vol_left(0x3c);
-        // self.write_register(dac_vol)?;
-        self.set_dac_vol(0xff);
-        self.set_lineout_vol(0xff);
-        self.set_hp_vol(0xff);
+        let mut dac_vol = ChipDacVol::new(0);
+        // Min: 0xFC, Max: 0x3c
+        dac_vol.set_dac_vol_right(0x3c);
+        dac_vol.set_dac_vol_left(0x3c);
+        self.write_register(dac_vol)?;
+        // self.set_dac_vol(0xff);
+        // self.set_lineout_vol(0xff);
+        // self.set_hp_vol(0xff);
 
-                             if false {
+                             // if false {
         use core::fmt::Write;
         use cortex_m_semihosting::hio;
         let mut stdout = hio::hstdout().unwrap();
-        for a in 0..0x20 {
+        for a in 0x1B..0x1D /*0..0x20*/ {
             let addr = 2 * a;
             // Send register addr
             let mut addr_buf = [0u8; 2];
@@ -258,7 +258,7 @@ impl<I2C: i2c::Read<Error=I2CE> + i2c::Write<Error=I2CE>, I2CE> SGTL5000Control<
             
             writeln!(stdout, "R {:02X} = {:04X}", addr, value).unwrap();
         }
-                             }
+                             // }
 
         Ok(())
     }
@@ -288,11 +288,11 @@ impl<I2C: i2c::Read<Error=I2CE> + i2c::Write<Error=I2CE>, I2CE> SGTL5000Control<
     /// Set headphones volume
     pub fn set_hp_vol<V: Into<Volume>>(&mut self, v: V) {
         let volume = v.into();
-        let (left, right) = volume.to_range(0xFC, 0x3C);
+        let (left, right) = volume.to_range(0x7F, 0);
 
         let mut ana_hp_ctrl = ChipAnaHpCtrl::new(0);
-        ana_hp_ctrl.set_hp_vol_right(0x18);
-        ana_hp_ctrl.set_hp_vol_left(0x18);
+        ana_hp_ctrl.set_hp_vol_right(left);
+        ana_hp_ctrl.set_hp_vol_left(right);
         self.write_register(ana_hp_ctrl);
     }
 }

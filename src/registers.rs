@@ -133,6 +133,8 @@ bitfield!{
     pub dac_mute_right, set_dac_mute_right: 3;
     ///
     pub dac_mute_left, set_dac_mute_left: 2;
+    pub vol_ramp_en, set_vol_ramp_en: 9;
+    pub vol_expo_ramp, set_vol_expo_ramp: 8;
 }
 
 impl I2cRegister for ChipAdcdacCtrl {

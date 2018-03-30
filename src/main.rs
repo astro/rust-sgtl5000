@@ -19,6 +19,7 @@ use cortex_m::asm;
 use cortex_m::interrupt::Mutex;
 use stm32f429::{Peripherals, CorePeripherals, SYST};
 use embedded_hal::blocking::*;
+use embedded_hal::digital::OutputPin;
 use stm32f429_hal::time::*;
 use stm32f429_hal::gpio::GpioExt;
 use stm32f429_hal::flash::FlashExt;
@@ -75,6 +76,10 @@ fn main() {
     setup_systick(&mut cp.SYST);
 
     let mut gpiob = p.GPIOB.split(&mut rcc.ahb1);
+    let mut led1 = gpiob.pb0.into_push_pull_output(&mut gpiob.moder, &mut gpiob.otyper);
+    let mut led2 = gpiob.pb7.into_push_pull_output(&mut gpiob.moder, &mut gpiob.otyper);
+    let mut led3 = gpiob.pb14.into_push_pull_output(&mut gpiob.moder, &mut gpiob.otyper);
+    
     // Bit 1 I2C1_REMAP: I2C1 remapping
     // This bit is set and cleared by software. It controls the mapping of I2C1 SCL and SDA
     // alternate functions on the GPIO ports.
@@ -114,12 +119,13 @@ fn main() {
     let mut freq = 50;
     let mut vo = 0;
     // let mut volume = 0xFF;
-    let mut values = [[0u16; 4096]; 3];
+    let mut values = [[0u16; 16384]; 3];
     let mut next_values = 2;
     // let mut freq = 50;
     let mut transfer: DoubleBufferedTransfer<u16> =
         output.dma_transfer(i2s_stream, C0, (&values[0], &values[1]));
     loop {
+        led2.set_high();
         let this_values = next_values;
         freq += 1;
         if freq > 440 {
@@ -130,12 +136,13 @@ fn main() {
         let interval = 2 * (48000 / freq);
         let delta = u16::max_value() / interval / 2;
         for (i, v) in values[this_values].iter_mut().enumerate() {
-            *v = vo;
-            // *v = if i & 1 == 0 { 0xa000 } else { 0xe000 };
+            // *v = vo;
+            *v = if vo & 0x8000u16 == 0 { 0x7fff } else { 0x0 };
             vo += delta;
-            // Clip signedness
-            vo &= 0x7FFFu16;
+            // // Clip signedness
+            // vo &= 0x7FFFu16;
         }
+        led2.set_low();
 
         next_values += 1;
         if next_values > values.len() {
@@ -147,9 +154,11 @@ fn main() {
             next_values = 0;
         }
 
+        led3.set_high();
         let mut retries = 0;
         while !transfer.writable() { retries += 1; }
         transfer.write(&values[this_values]).unwrap();
+        led3.set_low();
 
         if retries < 1 {
             writeln!(stdout, "Underrun?").unwrap();
@@ -160,6 +169,7 @@ fn main() {
         // sgtl.control.set_lineout_vol((volume & 0xF) << 4);
         // sgtl.control.set_hp_vol((volume & 0xF) << 4);
 
+        led1.set_high();
         total_samples += values[this_values].len();
         total_transfers += 1;
         let now = get_time();
@@ -170,6 +180,7 @@ fn main() {
             total_transfers_prev = total_transfers;
             last_stats = now;
         }
+        led1.set_low();
     }
 }
 
