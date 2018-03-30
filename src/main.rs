@@ -1,9 +1,9 @@
 #![no_std]
-//#![feature(used)]
+#![feature(used)]
 
 #[macro_use]
 extern crate bitfield;
-// extern crate byteorder;
+extern crate byteorder;
 extern crate cortex_m;
 extern crate cortex_m_rt;
 extern crate cortex_m_semihosting;
@@ -14,8 +14,10 @@ extern crate stm32f429_hal;
 
 // use byteorder::{ByteOrder, BigEndian};
 
+use core::cell::RefCell;
 use cortex_m::asm;
-use stm32f429::{Peripherals, CorePeripherals};
+use cortex_m::interrupt::Mutex;
+use stm32f429::{Peripherals, CorePeripherals, SYST};
 use embedded_hal::blocking::*;
 use stm32f429_hal::time::*;
 use stm32f429_hal::gpio::GpioExt;
@@ -23,11 +25,13 @@ use stm32f429_hal::flash::FlashExt;
 use stm32f429_hal::rcc::RccExt;
 use stm32f429_hal::i2c::{I2c, Error as I2cError};
 use stm32f429_hal::i2s::{I2s, I2sStandard};
-use stm32f429_hal::dma::DmaExt;
+use stm32f429_hal::dma::{DmaExt, C0};
+use stm32f429_hal::dma::dma1::s4::DoubleBufferedTransfer;
 
 use core::fmt::Write;
 use cortex_m_semihosting::hio;
 
+mod volume;
 mod registers;
 use registers::*;
 mod control;
@@ -58,7 +62,6 @@ fn main() {
     writeln!(stdout, "Hello!");
 
     let p = Peripherals::take().unwrap();
-    // let mut cp = CorePeripherals::take().unwrap();
   
     let mut flash = p.FLASH.constrain();
     let mut rcc = p.RCC.constrain();
@@ -68,6 +71,9 @@ fn main() {
     // let clocks = rcc.cfgr.sysclk(64.mhz()).pclk1(32.mhz()).freeze(&mut flash.acr);
     // writeln!(stdout, "clocks: {:?}", clocks);
     
+    let mut cp = CorePeripherals::take().unwrap();
+    setup_systick(&mut cp.SYST);
+
     let mut gpiob = p.GPIOB.split(&mut rcc.ahb1);
     // Bit 1 I2C1_REMAP: I2C1 remapping
     // This bit is set and cleared by software. It controls the mapping of I2C1 SCL and SDA
@@ -84,8 +90,6 @@ fn main() {
         .into_af4(&mut gpiob.moder, &mut gpiob.afrh);
     writeln!(stdout, "I2C");
     let i2c = I2c::i2c1(p.I2C1, scl, sda, 100.khz(), clocks, &mut rcc.apb1);
-    writeln!(stdout, "SGTL");
-    let mut sgtl = SGTL5000::new(i2c).unwrap();
 
     let sd = gpiob.pb15.into_af5(&mut gpiob.moder, &mut gpiob.afrh);
     let ck = gpiob.pb13.into_af5(&mut gpiob.moder, &mut gpiob.afrh);
@@ -93,47 +97,114 @@ fn main() {
     writeln!(stdout, "I2S");
     let i2s = I2s::spi2(p.SPI2, sd, ck, ws, clocks, &mut rcc.apb1);
     writeln!(stdout, "I2S output");
-    let mut output = i2s.into_slave_output(I2sStandard::MsbJustified);
+    let mut output = i2s.into_slave_output::<u16>(I2sStandard::Pcm);
 
     writeln!(stdout, "DMA setup");
     let streams = p.DMA1.split(&mut rcc.ahb1);
-    let mut stream = streams.s4;
-    
-    let mut values = [0u16; 32768];
-    let freq = 220;
-    let interval = 48000 / freq;
-    let delta = u16::max_value() / interval;
-    writeln!(stdout, "interval={} delta={}", interval, delta);
-    let mut vo = 0;
-    for i in 0..values.len() {
-        values[i] = vo;
-        vo += delta;
-    }
-    
-    loop {
-        // writeln!(stdout, "Send values");
-        // match output.dma_write(&values, stream) {
-        //     Ok(s) => {
-        //         stream = s;
-        //     },
-        //     Err(s) => {
-        //         writeln!(stdout, "DMA error");
-        //         stream = s;
-        //     },
-        // }
+    let mut i2s_stream = streams.s4;
 
-        for f in 2..1000 {
-            for v in values.iter() {
-                output.write(*v);
-            }
+    writeln!(stdout, "SGTL");
+    let mut sgtl = SGTL5000::new(i2c).unwrap();
+
+    let mut last_stats = get_time();
+    let mut total_samples_prev = 0usize;
+    let mut total_samples = 0usize;
+    let mut total_transfers_prev = 0usize;
+    let mut total_transfers = 0usize;
+    let mut freq = 50;
+    let mut vo = 0;
+    // let mut volume = 0xFF;
+    let mut values = [[0u16; 4096]; 3];
+    let mut next_values = 2;
+    // let mut freq = 50;
+    let mut transfer: DoubleBufferedTransfer<u16> =
+        output.dma_transfer(i2s_stream, C0, (&values[0], &values[1]));
+    loop {
+        let this_values = next_values;
+        freq += 1;
+        if freq > 440 {
+            freq = 50;
+            writeln!(stdout, "L {}", get_time()).unwrap();
         }
 
-        // let chip_id: Result<ChipId, _> = sgtl.control.read_register();
-        // match chip_id {
-        //     Ok(chip_id) =>
-        //         writeln!(stdout, "chip id: {:?}", chip_id).unwrap(),
-        //     Err(e) =>
-        //         writeln!(stdout, "error: {:?}", e).unwrap(),
-        // }
+        let interval = 2 * (48000 / freq);
+        let delta = u16::max_value() / interval / 2;
+        for (i, v) in values[this_values].iter_mut().enumerate() {
+            *v = vo;
+            // *v = if i & 1 == 0 { 0xa000 } else { 0xe000 };
+            vo += delta;
+            // Clip signedness
+            vo &= 0x7FFFu16;
+        }
+
+        next_values += 1;
+        if next_values > values.len() {
+            next_values = 0;
+        }
+        
+        next_values += 1;
+        if next_values > values.len() {
+            next_values = 0;
+        }
+
+        let mut retries = 0;
+        while !transfer.writable() { retries += 1; }
+        transfer.write(&values[this_values]).unwrap();
+
+        if retries < 1 {
+            writeln!(stdout, "Underrun?").unwrap();
+        }
+
+        // volume -= 1;
+        // sgtl.control.set_dac_vol(volume);
+        // sgtl.control.set_lineout_vol((volume & 0xF) << 4);
+        // sgtl.control.set_hp_vol((volume & 0xF) << 4);
+
+        total_samples += values[this_values].len();
+        total_transfers += 1;
+        let now = get_time();
+        let since_last_stats = now - last_stats;
+        if since_last_stats >= 10 {
+            writeln!(stdout, "{} s/s, {} t/s", (total_samples - total_samples_prev) / since_last_stats, (total_transfers - total_transfers_prev) / since_last_stats).unwrap();
+            total_samples_prev = total_samples;
+            total_transfers_prev = total_transfers;
+            last_stats = now;
+        }
     }
 }
+
+static TIME: Mutex<RefCell<usize>> = Mutex::new(RefCell::new(0));
+
+fn get_time() -> usize {
+    cortex_m::interrupt::free(|cs| {
+        *TIME.borrow(cs)
+            .borrow()
+    })
+}
+
+fn setup_systick(syst: &mut SYST) {
+    syst.set_reload(100 * SYST::get_ticks_per_10ms());
+    syst.enable_counter();
+    syst.enable_interrupt();
+
+    if ! SYST::is_precise() {
+        let mut stderr = hio::hstderr().unwrap();
+        writeln!(
+            stderr,
+            "Warning: SYSTICK with source {:?} is not precise",
+            syst.get_clock_source()
+        ).unwrap();
+    }
+}
+
+fn systick_interrupt_handler() {
+    cortex_m::interrupt::free(|cs| {
+        let mut time =
+            TIME.borrow(cs)
+            .borrow_mut();
+        *time += 1;
+    })
+}
+
+#[used]
+exception!(SYS_TICK, systick_interrupt_handler);

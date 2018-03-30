@@ -72,6 +72,7 @@ bitfield!{
     impl Debug;
     pub sclkfreq, set_sclkfreq: 8;
     pub ms, set_ms: 7;
+    pub sclk_pcmsync, set_pcmsync: 7;
     pub sclk_inv, set_sclk_inv: 6;
     pub u8, dlen, set_dlen: 5, 4;
     pub u8, i2s_mode, set_i2s_mode: 3, 2;
@@ -150,9 +151,9 @@ bitfield!{
     pub struct ChipDacVol(u16);
     impl Debug;
     /// DAC Right Channel Volume
-    pub dac_vol_right, set_dac_vol_right: 15, 8;
+    pub u8, dac_vol_right, set_dac_vol_right: 15, 8;
     /// DAC Left Channel Volume
-    pub dac_vol_left, set_dac_vol_left: 7, 0;
+    pub u8, dac_vol_left, set_dac_vol_left: 7, 0;
 }
 
 impl I2cRegister for ChipDacVol {
@@ -317,11 +318,26 @@ impl I2cRegister for ChipAnaPower {
     }
 }
 
-// impl ChipAnaPower {
-//     fn default() -> Self {
-//         Self::new(0x7060)
-//     }
-// }
+bitfield!{
+    pub struct ChipPllCtrl(u16);
+    impl Debug;
+    /// Integer portion of PLL divisor
+    pub u8, int_divisor, set_int_divisor: 15, 11;
+    /// Fractional portion of PLL divisor
+    pub u8, frac_divisor, set_frac_divisor: 10, 0;
+}
+
+impl I2cRegister for ChipPllCtrl {
+    fn new(value: u16) -> Self {
+        ChipPllCtrl(value)
+    }
+    fn to_inner(&self) -> u16 {
+        self.0
+    }
+    fn register_addr() -> u16 {
+        0x0032
+    }
+}
 
 bitfield!{
     pub struct ChipLineOutVol(u16);
@@ -339,6 +355,51 @@ impl I2cRegister for ChipLineOutVol {
     }
     fn register_addr() -> u16 {
         0x002E
+    }
+}
+
+bitfield!{
+    pub struct ChipClkTopCtrl(u16);
+    impl Debug;
+    /// Setting this bit enables an internal oscillator to be used for
+    /// the zero cross detectors, the short detect recovery, and the
+    /// charge pump.
+    pub enable_int_osc, set_enable_int_osc: 11;
+    /// SYS_MCLK divider before PLL input
+    pub input_freq_div2, set_input_freq_div2: 3;
+}
+
+impl I2cRegister for ChipClkTopCtrl {
+    fn new(value: u16) -> Self {
+        ChipClkTopCtrl(value)
+    }
+    fn to_inner(&self) -> u16 {
+        self.0
+    }
+    fn register_addr() -> u16 {
+        0x0034
+    }
+}
+
+bitfield!{
+    pub struct ChipShortCtrl(u16);
+    impl Debug;
+    pub u8, lvladjr, set_lvladjr: 14, 12;
+    pub u8, lvladjl, set_lvladjl: 10, 8;
+    pub u8, lvladjc, set_lvladjc: 6, 4;
+    pub u8, mode_lr, set_mode_lr: 3, 2;
+    pub u8, mode_cm, set_mode_cm: 1, 0;
+}
+
+impl I2cRegister for ChipShortCtrl {
+    fn new(value: u16) -> Self {
+        ChipShortCtrl(value)
+    }
+    fn to_inner(&self) -> u16 {
+        self.0
+    }
+    fn register_addr() -> u16 {
+        0x003C
     }
 }
 
